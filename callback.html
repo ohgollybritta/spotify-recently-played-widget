@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Spotify Auth — One Time Setup</title>
+  <style>
+    body { font-family: monospace; max-width: 600px; margin: 60px auto; padding: 0 24px; background: #111; color: #eee; line-height: 1.6; }
+    h1 { color: #1DB954; font-size: 1.1em; margin-bottom: 4px; }
+    p { color: #aaa; font-size: 0.85em; }
+    label { display: block; font-size: 0.8em; color: #888; margin-bottom: 4px; }
+    input { width: 100%; padding: 10px; margin-bottom: 16px; background: #1a1a1a; border: 1px solid #333; color: #eee; border-radius: 6px; font-family: monospace; font-size: 0.9em; box-sizing: border-box; }
+    button { background: #1DB954; color: #000; border: none; padding: 12px 28px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 0.95em; }
+    button:hover { background: #1ed760; }
+    .box { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; margin-top: 24px; }
+    .token-label { font-size: 0.75em; color: #888; margin-bottom: 6px; }
+    .token-value { word-break: break-all; color: #1DB954; font-size: 0.82em; background: #111; padding: 10px; border-radius: 4px; }
+    .copy-btn { margin-top: 10px; background: #333; color: #eee; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
+    .copy-btn:hover { background: #444; }
+    .error { color: #ff6b6b; font-size: 0.85em; margin-top: 12px; }
+    .step-num { color: #1DB954; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h1>🎵 Spotify Auth — One Time Setup</h1>
+  <p>Upload this file to your DreamHost server and visit it there. Do not run it locally.</p>
+
+  <div id="view-step1">
+    <br>
+    <span class="step-num">Step 1 of 2 —</span> Enter your Spotify app credentials
+    <br><br>
+    <label>Client ID</label>
+    <input type="text" id="client-id" placeholder="paste your client id" autocomplete="off" />
+    <label>Client Secret</label>
+    <input type="password" id="client-secret" placeholder="paste your client secret" autocomplete="off" />
+    <p style="margin-top:0">The redirect URI will be set to <strong id="this-url" style="color:#eee"></strong> — add this exact URL to your Spotify app dashboard under Redirect URIs before clicking below.</p>
+    <button onclick="startAuth()">Authorize with Spotify →</button>
+    <div class="error" id="err1"></div>
+  </div>
+
+  <div id="view-step2" style="display:none">
+    <br>
+    <span class="step-num">Step 2 of 2 —</span> Exchanging code for tokens…
+    <br><br>
+    <p id="exchange-status">Please wait…</p>
+  </div>
+
+  <div id="view-done" style="display:none" class="box">
+    <div style="color:#1DB954; font-weight:bold; margin-bottom:12px">✅ All done! Copy your refresh token.</div>
+    <div class="token-label">Refresh Token — paste this into spotify-proxy.php</div>
+    <div class="token-value" id="out-refresh"></div>
+    <button class="copy-btn" onclick="copyToken()">Copy to clipboard</button>
+    <br><br>
+    <div class="token-label" style="margin-top:8px">You can now delete this file from your server.</div>
+  </div>
+
+  <div id="view-error" style="display:none" class="box">
+    <div style="color:#ff6b6b; font-weight:bold; margin-bottom:8px">Something went wrong</div>
+    <div class="error" id="out-error"></div>
+  </div>
+
+  <script>
+    const thisUrl = window.location.href.split('?')[0];
+    document.getElementById('this-url').textContent = thisUrl;
+
+    const params = new URLSearchParams(window.location.search);
+    const code   = params.get('code');
+    const spErr  = params.get('error');
+
+    if (spErr) {
+      showView('view-error');
+      document.getElementById('out-error').textContent = 'Spotify denied access: ' + spErr;
+    } else if (code) {
+      showView('view-step2');
+      exchangeCode(code);
+    }
+
+    function startAuth() {
+      const clientId = document.getElementById('client-id').value.trim();
+      const secret   = document.getElementById('client-secret').value.trim();
+      if (!clientId || !secret) {
+        document.getElementById('err1').textContent = 'Please enter both Client ID and Client Secret.';
+        return;
+      }
+      sessionStorage.setItem('sp_id',  clientId);
+      sessionStorage.setItem('sp_sec', secret);
+
+      const url = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({
+        response_type: 'code',
+        client_id:     clientId,
+        scope:         'user-read-recently-played',
+        redirect_uri:  thisUrl,
+      });
+      window.location = url;
+    }
+
+    async function exchangeCode(code) {
+      const clientId = sessionStorage.getItem('sp_id');
+      const secret   = sessionStorage.getItem('sp_sec');
+
+      if (!clientId || !secret) {
+        showView('view-error');
+        document.getElementById('out-error').textContent = 'Session expired — go back and enter your credentials again.';
+        return;
+      }
+
+      try {
+        const res = await fetch('https://accounts.spotify.com/api/token', {
+          method: 'POST',
+          headers: {
+            'Content-Type':  'application/x-www-form-urlencoded',
+            'Authorization': 'Basic ' + btoa(clientId + ':' + secret),
+          },
+          body: new URLSearchParams({
+            grant_type:   'authorization_code',
+            code,
+            redirect_uri: thisUrl,
+          }),
+        });
+
+        const data = await res.json();
+        if (data.error) throw new Error(data.error + ': ' + data.error_description);
+
+        sessionStorage.removeItem('sp_id');
+        sessionStorage.removeItem('sp_sec');
+
+        document.getElementById('out-refresh').textContent = data.refresh_token;
+        showView('view-done');
+        history.replaceState({}, '', thisUrl);
+
+      } catch (e) {
+        showView('view-error');
+        document.getElementById('out-error').textContent = e.message;
+      }
+    }
+
+    function copyToken() {
+      navigator.clipboard.writeText(document.getElementById('out-refresh').textContent)
+        .then(() => { document.querySelector('.copy-btn').textContent = 'Copied!'; })
+        .catch(() => alert('Select and copy the token manually.'));
+    }
+
+    function showView(id) {
+      ['view-step1','view-step2','view-done','view-error'].forEach(v => {
+        document.getElementById(v).style.display = v === id ? 'block' : 'none';
+      });
+    }
+  </script>
+</body>
+</html>

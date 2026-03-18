@@ -1,0 +1,6 @@
+# Never commit your credentials
+spotify-proxy-configured.php
+
+# OS junk
+.DS_Store
+Thumbs.db
